@@ -19,4 +19,4 @@ From any nix system or gitbash use this
 export npm_config_registry=http://your-ip-or-domain-name:your-port/
 
 Or from a Windows machine
-set env
+set npm_config_registry=http://your-ip-or-domain-name:your-port/
