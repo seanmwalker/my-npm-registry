@@ -16,7 +16,7 @@ This tool is designed to be a proxy for the NPM client. It simply lets anything 
 
 ##Quick client setup to make life easy
 From any nix system or gitbash use this
-export npm_config_registry=http://your-ip-or-domain-name:your-port/
+```export npm_config_registry=http://your-ip-or-domain-name:your-port/```
 
 Or from a Windows machine
-set npm_config_registry=http://your-ip-or-domain-name:your-port/
+```set npm_config_registry=http://your-ip-or-domain-name:your-port/```
