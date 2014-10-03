@@ -5,14 +5,21 @@ var semver = require('semver');
 var http = require('http');
 var https = require('https');
 var moment = require('moment');
-var baseDir = process.env.BASE_DIR || path.resolve(process.env.HOME, '.proxy_npm');
-var debugDir = path.join(baseDir, 'debug');
+var baseDir = process.env.BASE_DIR || path.resolve(process.env.HOME, '.my-npm-registry');
+var debugDir = path.join(baseDir, '_debug');
 var publicRegistry = process.env.PUBLIC_REGISTRY || "https://registry.npmjs.org";
 var publicHost = publicRegistry.replace('http:\/\/', '').replace('https:\/\/', '');
+var debugMode = false;
 
-console.log('publicHost: ' + publicHost);
-console.log('debugDir: ' + debugDir);
-
+var logDebugInfo = function(msg, file, logToConsole) {
+    if (logToConsole) {
+        console.log(msg);
+    }
+    if (debugMode) {
+        // pathSegments.replace(/\//ig, '-') .replace(/\\/ig, '-') + '.put.txt'
+        fs.appendFileSync(path.join(debugDir, file || 'application-log.txt'), msg + '\r\n');
+    }
+};
 
 // True we created it, false we did not
 var createDirIfMissing = function(dir) {
@@ -26,21 +33,32 @@ var createDirIfMissing = function(dir) {
     }
 };
 
-// Check to see if we have this directory by name.
-var requestPathMatchesOurData = function(pathSegments) {
-    console.log('requestPathMatchesOurData -> pathSegments: ' + pathSegments);
-    // "tarball": "http://localhost:8080/my-local-module/-/my-local-module-0.0.0.tgz"
+var getFirstSegmentFromPath = function(pathSegments) {
     var segments = pathSegments.split('/');
     // Get the first non empty segment
-    var firstSegment = segments[0] || segments[1];
-    var pkgFolder = path.resolve(baseDir, firstSegment);
+    return segments[0] || segments[1];
+};
+
+// Check to see if we have this directory by name.
+var requestPathMatchesOurData = function(pathSegments) {
+    var pkgFolder = path.resolve(baseDir, pathSegments);
+    logDebugInfo('requestPathMatchesOurData -> pkgFolder: ' + pkgFolder);
     try {
-        fs.statSync(pkgFolder);
-        return true;
+        var stats = fs.statSync(pkgFolder);
+        logDebugInfo('\trequestPathMatchesOurData found a matching file or folder');
+
+        // This is a package request only
+        if (stats.isDirectory())  {
+            return 'PACKAGE';
+        }
+        else {
+            return 'TAR';
+        }
     }
     catch(e) {
-        return false;
+        logDebugInfo('\trequestPathMatchesOurData has no match: ' + e.message + ' ' + e.stack);
     }
+    return 'REMOTE';
 };
 
 var savePackage = function(name, version, payload) {
@@ -52,8 +70,8 @@ var savePackage = function(name, version, payload) {
     var isFirstOne = createDirIfMissing(pkgFolder);
     createDirIfMissing(dashFolder);
     var currTimeStamp = moment().utc().format("YYYY-MM-DDTHH:mm:ss:SSS") + 'Z';
-    
-    console.log('currTimeStamp: ' + currTimeStamp);
+
+    logDebugInfo('currTimeStamp: ' + currTimeStamp);
 
     // Clean up the object we need to.
     if (isFirstOne) {
@@ -66,8 +84,10 @@ var savePackage = function(name, version, payload) {
         payload.time["created"] = currTimeStamp;
     }
     else {
+        var currentVersion = payload.versions[version];
         payload = JSON.parse(getPackage(name));
         payload.time["modified"] = currTimeStamp;
+        payload.versions[version] = currentVersion;
     }
 
     // Set modified time and add time / version
@@ -85,19 +105,32 @@ var getPackage = function(name) {
     return fs.readFileSync(pkgFile);
 };
 
-var getTarBall = function(path) {
+var getTarBall = function(pathSegments) {
     try {
-        var tarFolder = path.resolve(baseDir, path);
+        var tarFolder = path.resolve(baseDir, pathSegments);
         // Just checking to see that the requested version exists server side.
         fs.statSync(tarFolder);
         return fs.readFileSync(tarFolder);
     }
     catch (e) {
+        logDebugInfo('Error fetching tgz file: ' + pathSegments + ' ' + e.message + ' ' + e.stack, null, true);
         return;
     }
 };
 
-//---------------------------------------
+// ------------------------------------------------------------------------------
+// - Start the application code.
+// ------------------------------------------------------------------------------
+
+// Setup the debug mode based on the flag
+for (var i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] === '--debug') {
+        debugMode = true;
+        logDebugInfo('******************************   In debug mode    ******************************', null, true);
+    }
+}
+
+logDebugInfo('publicHost: ' + publicHost, null, true);
 
 createDirIfMissing(baseDir);
 createDirIfMissing(debugDir);
@@ -105,22 +138,21 @@ createDirIfMissing(debugDir);
 http.createServer(function(request, response) {
     var pathSegments = url.parse(request.url).pathname.substring(1, 999);
 
-    console.log('Request.Url: ' + request.url);
+    logDebugInfo('Request.Url: "' + request.url + '"" - request.method: ' + request.method, null, true);
 
-    var name = pathSegments;
+    var name = getFirstSegmentFromPath(pathSegments);
     var version; // TODO: Detect if one is requested, and use it
     if (request.method.toUpperCase() === "PUT") {
         var putData = '';
 
         request.on('data', function(chunk) {
-            console.log("Received body data:" + putData);
+            logDebugInfo("Received body data:" + putData);
             putData += chunk.toString();
         });
 
         request.on('end', function() {
             // empty 200 OK response for now
-            console.log("Done receiving data. Save and respond: " + putData);
-            fs.appendFileSync(path.join(debugDir, pathSegments.replace(/\//ig, '-') .replace(/\\/ig, '-') + '.put.txt'), '--------------------------------- END PUT ----------------------------\n' + putData + '\n');
+            logDebugInfo("Done receiving data. Save and respond: \r\n--------------------------------- END PUT ----------------------------\r\n" + putData, getFirstSegmentFromPath(pathSegments) + '.' + request.method + '.txt');
             var payload = JSON.parse(putData);
             version = payload.versions[Object.keys(payload.versions)[0]].version;
             savePackage(name, version, payload);
@@ -131,36 +163,37 @@ http.createServer(function(request, response) {
     }
     else if (request.method.toUpperCase() === "GET") {
         var isPackageOrTarRequest = requestPathMatchesOurData(pathSegments);
-        console.log('GET - Request.Url: ' + request.url);
+        logDebugInfo('GET - Request.Url: "' + request.url + '" request type: ' + isPackageOrTarRequest);
 
         if (isPackageOrTarRequest === 'PACKAGE') {
             var file = getPackage(name);
             if (file) {
-                console.log('Returning file: %s %s %s', name, version, file);
+                logDebugInfo('Returning file: ' + name + ' ' + file + '.', null, true);
+
                 try
                 {
                     response.statusCode = 200;
-                    response.write(data, 'utf-8');
+                    response.write(file, 'utf-8');
                     response.end();
                     console.log('data sent.');
                 }
                 catch (e) {
-                    console.log('Error: ' + JSON.stringify(e));
+                    console.log('PKG Error: ' + (e.message + e.stack || e.toString() || JSON.stringify(e)));
                     response.statusCode = 500;
-                    response.write('Error: ' + JSON.stringify(e));
+                    response.write('PKG Error: ' + (e.message + e.stack || e.toString() || JSON.stringify(e)));
                     response.end();
                 }
                 return;
             }
             else {
-                console.log('Nothing found for %s %s.', name, version);
+                logDebugInfo('Nothing found for ' + name + ' ' + version + '.', null, true);
             }
         }
         else if (isPackageOrTarRequest === 'TAR') {
             // Need to handle version in the name and or path
-            var data = getTarBall(name, version);
+            var data = getTarBall(pathSegments);
             if (data) {
-                console.log('Returning data: %s %s %s', name, version, data);
+                logDebugInfo('Returning data for ' + pathSegments + ' ' + data + '.', null, true);
                 try
                 {
                     response.statusCode = 200;
@@ -169,15 +202,15 @@ http.createServer(function(request, response) {
                     console.log('data sent.');
                 }
                 catch (e) {
-                    console.log('Error: ' + JSON.stringify(e));
+                    logDebugInfo('TAR Error: ' + (e.message + e.stack || e.toString() || JSON.stringify(e)), null, true);
                     response.statusCode = 500;
-                    response.write('Error: ' + JSON.stringify(e));
+                    response.write('TAR Error: ' + (e.message + e.stack || e.toString() || JSON.stringify(e)));
                     response.end();
                 }
                 return;
             }
             else {
-                console.log('Nothing found for %s %s.', name, version);
+                logDebugInfo('Nothing found for ' + pathSegments + '.', null, true);
             }
         }
     }
@@ -195,7 +228,7 @@ http.createServer(function(request, response) {
         headers: request.headers
     };
 
-    console.log("Request.Options: " + JSON.stringify(options));
+    logDebugInfo("Request.Options: " + JSON.stringify(options));
 
     var httpRequest;
 
@@ -211,12 +244,12 @@ http.createServer(function(request, response) {
         });
 
         httpResponse.on('end', function() {
-            //fs.appendFileSync(path.join(debugDir, options.path.replace(/\//ig, '-') .replace(/\\/ig, '-') + '.txt'), '-------------------------------- END -----------------------------\n' + allData + '\n');
+            logDebugInfo('-------------------------------- END -----------------------------\r\n' + allData, getFirstSegmentFromPath(pathSegments) + '.' + request.method + '.txt');
             response.end();
         });
 
         httpResponse.on('close', function() {
-            //fs.appendFileSync(path.join(debugDir, options.path.replace(/\//ig, '-') .replace(/\\/ig, '-') + '.txt'), '--------------------------------- CLOSE ----------------------------\n' + allData + '\n');
+            logDebugInfo('-------------------------------- CLOSE -----------------------------\r\n' + allData, getFirstSegmentFromPath(pathSegments) + '.' + request.method + '.txt');
             response.end();
         });
 
@@ -232,12 +265,12 @@ http.createServer(function(request, response) {
     }
 
     request.addListener('data', function(chunk) {
-        console.log('Request data: chunk received: ' + chunk);
+        logDebugInfo('Request data: chunk received: ' + chunk);
         httpRequest.write(chunk, 'binary');
     });
 
     request.addListener('end', function() {
-        console.log('Request end.');
+        logDebugInfo('Request end.');
         httpRequest.end();
     });
 
