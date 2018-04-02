@@ -23,3 +23,9 @@ Or from a Windows machine
 
 ##Note of caution
 Before you publish it's a good idea to check your registry setting like this: `npm config list`. If for any reason the setting for registry is not correct, it could publish your module to another source. If this tool is turned off/stopped then your publish and installs etc won't work until you revert the registry setting or restart this tool.
+
+##Roadmap
+Assuming others find this an interesting/useful tool, the following steps are planned:
+  - Swap out all of the bad blocking sync calls to the file system for async calls.
+  - Implement all of the unpublish calls.
+  
