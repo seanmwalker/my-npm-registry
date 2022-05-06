@@ -11,6 +11,6 @@
   "license": "ISC",
   "dependencies": {
     "semver": "^4.3.2",
-    "moment": "~2.19.3"
+    "moment": "~2.29.2"
   }
 }
